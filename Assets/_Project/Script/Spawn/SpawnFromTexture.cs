@@ -14,6 +14,11 @@ public class SpawnFromTexture : MonoBehaviour
     [SerializeField] private float spacing = 0.02f;
     [SerializeField] private float alphaThreshold = 0.1f;
 
+    [Header("Parent Scale")]
+    [SerializeField] private float spriteSizeThreshold = 20f;
+    [SerializeField] private float parentScaleAtOrBelowThreshold = 1f;
+    [SerializeField] private float parentScaleAboveThreshold = 0.8f;
+
     public Sprite SourceSprite => sourceSprite;
 
     private void Start()
@@ -28,6 +33,8 @@ public class SpawnFromTexture : MonoBehaviour
 
         Texture2D tex = sourceSprite.texture;
         Rect rect = sourceSprite.rect;
+
+        ApplyParentScale(rect);
 
         float step = pixelSize + spacing;
         Vector3 offset = new Vector3(rect.width, rect.height, 0) * step * 0.5f;
@@ -58,6 +65,16 @@ public class SpawnFromTexture : MonoBehaviour
                 RegisterCellColor(obj, color);
             }
         }
+    }
+
+    private void ApplyParentScale(Rect rect)
+    {
+        if (parent == null)
+            return;
+
+        bool isAtOrBelowThreshold = rect.width <= spriteSizeThreshold && rect.height <= spriteSizeThreshold;
+        float scale = isAtOrBelowThreshold ? parentScaleAtOrBelowThreshold : parentScaleAboveThreshold;
+        parent.localScale = Vector3.one * scale;
     }
 
     private void SetColor(GameObject obj, Color color)

@@ -30,6 +30,9 @@ public class BlockSplineRunner : MonoBehaviour
 
     [Header("Shoot Control")]
     [SerializeField] private float shootCooldown = 0.03f;
+    
+    [Header("Run Limit")]
+    [SerializeField] private int maxConcurrentRunningBlocks = 5;
 
     private SplineAnimate splineAnimate;
     private Collider cachedCollider;
@@ -50,6 +53,7 @@ public class BlockSplineRunner : MonoBehaviour
     private float nextAllowedShootTime = 0f;
 
     private static Camera cam;
+    private static int runningBlockCount = 0;
 
     public bool IsRunning => isRunning;
 
@@ -68,6 +72,11 @@ public class BlockSplineRunner : MonoBehaviour
         TryResolveSplineContainer();
         TryResolveMapTransform();
         TryResolveSlotReturns();
+    }
+
+    private void OnDisable()
+    {
+        StopRunningState();
     }
 
     private void Update()
@@ -99,6 +108,23 @@ public class BlockSplineRunner : MonoBehaviour
         {
             if (IsHitThisBlock(hit.collider))
             {
+                if (isRunning)
+                {
+                    Debug.Log($"BlockSplineRunner: {name} is already running. Click ignored.");
+                    return;
+                }
+
+                int occupiedSlotCount = GetOccupiedSlotCountForLimit();
+                int activeBlockCount = runningBlockCount + occupiedSlotCount;
+                if (activeBlockCount >= maxConcurrentRunningBlocks)
+                {
+                    Debug.Log(
+                        $"BlockSplineRunner: click blocked because active blocks reached limit. " +
+                        $"Running={runningBlockCount}, OccupiedSlots={occupiedSlotCount}, Limit={maxConcurrentRunningBlocks}."
+                    );
+                    return;
+                }
+
                 Run();
             }
         }
@@ -126,7 +152,7 @@ public class BlockSplineRunner : MonoBehaviour
         splineAnimate.Restart(true);
         splineAnimate.Play();
 
-        isRunning = true;
+        StartRunningState();
     }
 
     public void SetSpline(SplineContainer spline)
@@ -414,15 +440,55 @@ public class BlockSplineRunner : MonoBehaviour
     {
         if (splineAnimate == null)
         {
-            isRunning = false;
+            StopRunningState();
             return;
         }
 
         if (splineAnimate.NormalizedTime >= 1f)
         {
-            isRunning = false;
+            StopRunningState();
             MoveToSlotReturn();
         }
+    }
+
+    private void StartRunningState()
+    {
+        if (isRunning)
+            return;
+
+        isRunning = true;
+        runningBlockCount++;
+    }
+
+    private void StopRunningState()
+    {
+        if (!isRunning)
+            return;
+
+        isRunning = false;
+        runningBlockCount = Mathf.Max(0, runningBlockCount - 1);
+    }
+
+    private int GetOccupiedSlotCountForLimit()
+    {
+        TryResolveSlotReturns();
+
+        if (slotReturns == null || slotReturns.Length == 0)
+            return 0;
+
+        int occupiedCount = 0;
+        for (int i = 0; i < slotReturns.Length; i++)
+        {
+            if (slotReturns[i] == null || !slotReturns[i].IsOccupied)
+                continue;
+
+            if (currentSlotReturn != null && slotReturns[i] == currentSlotReturn)
+                continue;
+
+            occupiedCount++;
+        }
+
+        return occupiedCount;
     }
 
     private void MoveToSlotReturn()

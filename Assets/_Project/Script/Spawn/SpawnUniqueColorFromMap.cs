@@ -68,7 +68,7 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
                 0
             );
 
-            obj.transform.localRotation = Quaternion.identity;
+            obj.transform.localRotation = Quaternion.Euler(90,0,0);
 
             SetColor(obj, uniqueColors[i]);
         }
