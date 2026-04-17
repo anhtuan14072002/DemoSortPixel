@@ -1,8 +1,20 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class SpawnUniqueColorFromMap : MonoBehaviour
 {
+    private struct ColorGroup
+    {
+        public Color Color;
+        public int Count;
+
+        public ColorGroup(Color color, int count)
+        {
+            Color = color;
+            Count = count;
+        }
+    }
+
     [Header("Ref")]
     [SerializeField] private SpawnFromTexture mapSource;
 
@@ -12,7 +24,7 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
 
     [Header("Layout")]
     [SerializeField] private float spacing = 1.2f;
-    [SerializeField] private int column = 5; 
+    [SerializeField] private int column = 5;
 
     [Header("Color Setting")]
     [SerializeField] private float colorTolerance = 0.05f;
@@ -27,14 +39,17 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
 
     public void SpawnUnique()
     {
-        if (mapSource == null) return;
+        if (mapSource == null)
+            return;
+
         Sprite sourceSprite = mapSource.SourceSprite;
-        if (sourceSprite == null) return;
+        if (sourceSprite == null)
+            return;
 
         Texture2D tex = sourceSprite.texture;
         Rect rect = sourceSprite.rect;
 
-        List<Color> uniqueColors = new List<Color>();
+        List<ColorGroup> colorGroups = new List<ColorGroup>();
 
         for (int x = 0; x < rect.width; x++)
         {
@@ -48,14 +63,11 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
                 if (color.a < alphaThreshold)
                     continue;
 
-                if (!IsColorExist(uniqueColors, color))
-                {
-                    uniqueColors.Add(color);
-                }
+                AddOrIncreaseColorGroup(colorGroups, color);
             }
         }
 
-        for (int i = 0; i < uniqueColors.Count; i++)
+        for (int i = 0; i < colorGroups.Count; i++)
         {
             int x = i % column;
             int y = i / column;
@@ -68,20 +80,27 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
                 0
             );
 
-            obj.transform.localRotation = Quaternion.Euler(90,0,0);
+            obj.transform.localRotation = Quaternion.Euler(90, 0, 0);
 
-            SetColor(obj, uniqueColors[i]);
+            SetColor(obj, colorGroups[i].Color);
+            InitializeBlock(obj, colorGroups[i].Count);
         }
     }
 
-    private bool IsColorExist(List<Color> list, Color target)
+    private void AddOrIncreaseColorGroup(List<ColorGroup> groups, Color target)
     {
-        foreach (var c in list)
+        for (int i = 0; i < groups.Count; i++)
         {
-            if (IsSimilar(c, target))
-                return true;
+            if (!IsSimilar(groups[i].Color, target))
+                continue;
+
+            ColorGroup group = groups[i];
+            group.Count++;
+            groups[i] = group;
+            return;
         }
-        return false;
+
+        groups.Add(new ColorGroup(target, 1));
     }
 
     private bool IsSimilar(Color a, Color b)
@@ -98,10 +117,20 @@ public class SpawnUniqueColorFromMap : MonoBehaviour
             _mpb = new MaterialPropertyBlock();
 
         var renderer = obj.GetComponent<MeshRenderer>();
-        if (renderer == null) return;
+        if (renderer == null)
+            return;
 
         renderer.GetPropertyBlock(_mpb);
         _mpb.SetColor("_BaseColor", color);
         renderer.SetPropertyBlock(_mpb);
+    }
+
+    private void InitializeBlock(GameObject obj, int shotCount)
+    {
+        BlockSplineRunner runner = obj.GetComponent<BlockSplineRunner>();
+        if (runner == null)
+            return;
+
+        runner.InitializeShotLimit(shotCount);
     }
 }

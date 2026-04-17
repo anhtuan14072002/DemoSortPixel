@@ -2,6 +2,8 @@
 using UnityEngine;
 using UnityEngine.Splines;
 using Sand;
+using TMPro;
+using PrimeTween;
 
 public class BlockSplineRunner : MonoBehaviour
 {
@@ -34,6 +36,14 @@ public class BlockSplineRunner : MonoBehaviour
     [Header("Run Limit")]
     [SerializeField] private int maxConcurrentRunningBlocks = 5;
 
+    [Header("Ammo UI")]
+    [SerializeField] private TMP_Text remainingShotsText;
+    [SerializeField] private float outOfShotsDestroyDuration = 0.15f;
+
+    [Header("Return Move")]
+    [SerializeField] private float returnJumpDuration = 0.35f;
+    [SerializeField] private float returnJumpHeight = 0.6f;
+
     private SplineAnimate splineAnimate;
     private Collider cachedCollider;
     private MeshRenderer cachedRenderer;
@@ -41,6 +51,7 @@ public class BlockSplineRunner : MonoBehaviour
     private SlotReturn currentSlotReturn;
 
     private bool isRunning = false;
+    private bool isReturningToSlot = false;
 
     // Cell đã bị xóa xong
     private readonly HashSet<int> deletedInstanceIds = new HashSet<int>();
@@ -54,6 +65,9 @@ public class BlockSplineRunner : MonoBehaviour
 
     private static Camera cam;
     private static int runningBlockCount = 0;
+    private int remainingShots;
+    private bool shouldDestroyWhenProjectilesFinish;
+    private bool isDestroyingOutOfShots;
 
     public bool IsRunning => isRunning;
 
@@ -62,6 +76,10 @@ public class BlockSplineRunner : MonoBehaviour
         splineAnimate = GetComponent<SplineAnimate>();
         cachedCollider = GetComponent<Collider>();
         cachedRenderer = GetComponent<MeshRenderer>();
+        if (remainingShotsText == null)
+        {
+            remainingShotsText = GetComponentInChildren<TMP_Text>(true);
+        }
 
         if (splineAnimate != null)
         {
@@ -72,6 +90,7 @@ public class BlockSplineRunner : MonoBehaviour
         TryResolveSplineContainer();
         TryResolveMapTransform();
         TryResolveSlotReturns();
+        UpdateRemainingShotsText();
     }
 
     private void OnDisable()
@@ -158,6 +177,13 @@ public class BlockSplineRunner : MonoBehaviour
     public void SetSpline(SplineContainer spline)
     {
         splineContainer = spline;
+    }
+
+    public void InitializeShotLimit(int shotCount)
+    {
+        remainingShots = Mathf.Max(0, shotCount);
+        shouldDestroyWhenProjectilesFinish = remainingShots == 0;
+        UpdateRemainingShotsText();
     }
 
     private void CacheMainCamera()
@@ -361,6 +387,9 @@ public class BlockSplineRunner : MonoBehaviour
         if (cell == null)
             return;
 
+        if (remainingShots <= 0)
+            return;
+
         int id = cell.gameObject.GetInstanceID();
 
         if (deletedInstanceIds.Contains(id))
@@ -411,6 +440,12 @@ public class BlockSplineRunner : MonoBehaviour
         pendingInstanceIds.Add(id);
         lastShotCellId = id;
         nextAllowedShootTime = Time.time + shootCooldown;
+        remainingShots--;
+        if (remainingShots <= 0)
+        {
+            shouldDestroyWhenProjectilesFinish = true;
+        }
+        UpdateRemainingShotsText();
     }
 
     public void NotifyProjectileFinished(ColorCell cell, bool deleteCell)
@@ -434,6 +469,8 @@ public class BlockSplineRunner : MonoBehaviour
                 cell.PlayDestroyAnimation();
             }
         }
+
+        TryDestroyIfOutOfShots();
     }
 
     private void CheckSplineFinished()
@@ -506,11 +543,9 @@ public class BlockSplineRunner : MonoBehaviour
             if (slotReturns[i].IsOccupied)
                 continue;
 
-            transform.position = slotReturns[i].transform.position;
-            transform.rotation = slotReturns[i].transform.rotation;
             slotReturns[i].SetOccupied(true);
             currentSlotReturn = slotReturns[i];
-            Debug.Log($"BlockSplineRunner: {name} moved to SlotReturn {slotReturns[i].name} (Id: {slotReturns[i].SlotId}).");
+            AnimateMoveToSlotReturn(slotReturns[i]);
             return;
         }
 
@@ -524,6 +559,64 @@ public class BlockSplineRunner : MonoBehaviour
 
         currentSlotReturn.SetOccupied(false);
         currentSlotReturn = null;
+    }
+
+    private void AnimateMoveToSlotReturn(SlotReturn slotReturn)
+    {
+        if (slotReturn == null)
+            return;
+
+        if (isReturningToSlot)
+            return;
+
+        isReturningToSlot = true;
+
+        Vector3 targetLocalPosition = GetTargetLocalPosition(slotReturn.transform.position);
+        float baseLocalZ = targetLocalPosition.z;
+        float duration = Mathf.Max(0.01f, returnJumpDuration);
+        Sequence jumpSequence = Sequence.Create()
+            .Chain(Tween.LocalPositionZ(transform, baseLocalZ + returnJumpHeight, duration * 0.5f, Ease.OutQuad))
+            .Chain(Tween.LocalPositionZ(transform, baseLocalZ, duration * 0.5f, Ease.InQuad));
+
+        Sequence.Create()
+            .Group(Tween.LocalPosition(transform, targetLocalPosition, duration, Ease.InOutSine))
+            .Group(jumpSequence)
+            .OnComplete(this, target =>
+            {
+                target.transform.rotation = slotReturn.transform.rotation;
+                target.isReturningToSlot = false;
+                Debug.Log($"BlockSplineRunner: {target.name} moved to SlotReturn {slotReturn.name} (Id: {slotReturn.SlotId}).");
+            });
+    }
+
+    private Vector3 GetTargetLocalPosition(Vector3 worldPosition)
+    {
+        if (transform.parent == null)
+            return worldPosition;
+
+        return transform.parent.InverseTransformPoint(worldPosition);
+    }
+
+    private void TryDestroyIfOutOfShots()
+    {
+        if (!shouldDestroyWhenProjectilesFinish)
+            return;
+
+        if (pendingInstanceIds.Count > 0)
+            return;
+
+        if (isDestroyingOutOfShots)
+            return;
+
+        isDestroyingOutOfShots = true;
+        StopRunningState();
+        ReleaseCurrentSlot();
+        Tween.Scale(
+            transform,
+            Vector3.zero,
+            Mathf.Max(0.01f, outOfShotsDestroyDuration),
+            Ease.OutQuad
+        ).OnComplete(this, target => Destroy(target.gameObject));
     }
 
     public Color GetMyColor()
@@ -555,6 +648,14 @@ public class BlockSplineRunner : MonoBehaviour
         }
 
         return Color.white;
+    }
+
+    private void UpdateRemainingShotsText()
+    {
+        if (remainingShotsText == null)
+            return;
+
+        remainingShotsText.text = remainingShots.ToString();
     }
 
     private bool IsSameColor(Color a, Color b)
