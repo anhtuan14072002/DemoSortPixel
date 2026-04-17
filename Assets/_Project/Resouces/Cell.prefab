@@ -122,3 +122,5 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   cellColor: {r: 0, g: 0, b: 0, a: 0}
+  destroyScaleDuration: 0.12
+  _collider: {fileID: 4540028041263138439}
