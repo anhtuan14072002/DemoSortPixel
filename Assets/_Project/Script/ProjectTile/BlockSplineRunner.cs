@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+﻿﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Splines;
 using TMPro;
@@ -8,24 +8,25 @@ namespace Pixel
 {
     public class BlockSplineRunner : MonoBehaviour, IPoolable
     {
-        [SerializeField] private SplineContainer splineContainer;
-        [SerializeField] private Transform mapTransform;
-        [SerializeField] private SlotReturn[] slotReturns;
+        [SerializeField] private Transform projectileSpawnPoint;
+        [SerializeField] private LayerMask cellLayerMask = ~0;
+        [SerializeField] private GameObject hitPrefab;
+        [SerializeField] private TMP_Text remainingShotsText;
+
         [SerializeField] private float colorTolerance = 0.05f;
         [SerializeField] private float castDistance = 8f;
         [SerializeField] private float originBackOffset = 0.15f;
-        [SerializeField] private LayerMask cellLayerMask = ~0;
-        [SerializeField] private bool drawDebugCast = true;
-        [SerializeField] private GameObject hitPrefab;
-        [SerializeField] private Transform projectileSpawnPoint;
         [SerializeField] private float projectileSpeed = 12f;
         [SerializeField] private float shootCooldown = 0.03f;
-        [SerializeField] private int maxConcurrentRunningBlocks = 5;
-        [SerializeField] private TMP_Text remainingShotsText;
         [SerializeField] private float outOfShotsDestroyDuration = 0.15f;
         [SerializeField] private float returnJumpDuration = 0.35f;
         [SerializeField] private float returnJumpHeight = 0.6f;
+        [SerializeField] private int maxConcurrentRunningBlocks = 5;
+        [SerializeField] private bool drawDebugCast = true;
 
+        private SplineContainer splineContainer;
+        private SlotReturn[] slotReturns;
+        private Transform mapTransform;
         private SplineAnimate splineAnimate;
         private Collider cachedCollider;
         private MeshRenderer cachedRenderer;
@@ -36,10 +37,9 @@ namespace Pixel
         private bool isReturningToSlot = false;
 
         // Cell đã bị xóa xong
-        private readonly HashSet<int> deletedInstanceIds = new HashSet<int>();
-
+        private readonly HashSet<int> deletedInstanceIds = new();
         // Cell đang bị projectile bay tới, chưa được bắn lại
-        private readonly HashSet<int> pendingInstanceIds = new HashSet<int>();
+        private readonly HashSet<int> pendingInstanceIds = new();
 
         private int lastHitCellId = -1;
         private int lastShotCellId = -1;
@@ -47,6 +47,7 @@ namespace Pixel
 
         private static Camera cam;
         private static int runningBlockCount = 0;
+        private static readonly HashSet<BlockSplineRunner> activeBlocks = new();
         private int remainingShots;
         private bool shouldDestroyWhenProjectilesFinish;
         private bool isDestroyingOutOfShots;
@@ -92,19 +93,14 @@ namespace Pixel
             cachedCollider = GetComponent<Collider>();
             cachedRenderer = GetComponent<MeshRenderer>();
             initialLocalScale = transform.localScale;
-            if (remainingShotsText == null)
-            {
-                remainingShotsText = GetComponentInChildren<TMP_Text>(true);
-            }
-
+            
+            
             projectilePrefabComponent = hitPrefab != null ? hitPrefab.GetComponent<ColorProjectile>() : null;
             if (projectilePrefabComponent != null)
                 projectilePool = new PrefabPool<ColorProjectile>(projectilePrefabComponent, null);
 
             if (splineAnimate != null)
-            {
                 splineAnimate.PlayOnAwake = false;
-            }
 
             CacheMainCamera();
             TryResolveSplineContainer();
@@ -116,22 +112,21 @@ namespace Pixel
         private void OnDisable()
         {
             StopRunningState();
+            activeBlocks.Remove(this);
+        }
+
+        private void OnEnable()
+        {
+            activeBlocks.Add(this);
         }
 
         private void Update()
         {
-            if (Input.GetMouseButtonDown(0))
-            {
-                HandleClick();
-            }
+            if (Input.GetMouseButtonDown(0)) HandleClick();
 
             if (isRunning)
             {
-                if (mapTransform == null)
-                {
-                    TryResolveMapTransform();
-                }
-
+                if (mapTransform == null) TryResolveMapTransform();
                 DetectAndShootNearestCellByRaycast();
                 CheckSplineFinished();
             }
@@ -148,9 +143,7 @@ namespace Pixel
                 if (IsHitThisBlock(hit.collider))
                 {
                     if (isRunning) return;
-                    int occupiedSlotCount = GetOccupiedSlotCountForLimit();
-                    int activeBlockCount = runningBlockCount + occupiedSlotCount;
-                    if (activeBlockCount >= maxConcurrentRunningBlocks) return;
+                    if (runningBlockCount >= maxConcurrentRunningBlocks) return;
                     Run();
                 }
             }
@@ -180,7 +173,7 @@ namespace Pixel
 
             StartRunningState();
         }
-        
+
         public void InitializeShotLimit(int shotCount)
         {
             remainingShots = Mathf.Max(0, shotCount);
@@ -211,13 +204,12 @@ namespace Pixel
             }
 
             GameObject mapObj = GameObject.Find("Map");
-            
+
             if (mapObj != null)
             {
                 mapTransform = mapObj.transform;
                 return;
             }
-
         }
 
         private void TryResolveSlotReturns()
@@ -297,6 +289,7 @@ namespace Pixel
                 if (pendingInstanceIds.Contains(id)) continue;
                 return cell;
             }
+
             return null;
         }
 
@@ -312,6 +305,7 @@ namespace Pixel
                 if (localPos.x > 0f) return -mapTransform.right;
                 return mapTransform.right;
             }
+
             if (localPos.y > 0f) return -mapTransform.up;
             return mapTransform.up;
         }
@@ -333,12 +327,7 @@ namespace Pixel
             if (projectilePool == null)
             {
                 projectilePrefabComponent = hitPrefab.GetComponent<ColorProjectile>();
-                if (projectilePrefabComponent == null)
-                {
-                    Debug.LogWarning($"{nameof(BlockSplineRunner)} requires hitPrefab to contain {nameof(ColorProjectile)} for pooling.", this);
-                    return;
-                }
-
+                if (projectilePrefabComponent == null) return;
                 projectilePool = new PrefabPool<ColorProjectile>(projectilePrefabComponent, null);
             }
 
@@ -346,14 +335,14 @@ namespace Pixel
 
             ColorProjectile projectile = projectilePool.Get();
             projectile.transform.SetPositionAndRotation(spawnPos, Quaternion.identity);
-            
+
             projectile.Initialize(cell, myColor, colorTolerance, projectileSpeed, this);
 
             pendingInstanceIds.Add(id);
             lastShotCellId = id;
             nextAllowedShootTime = Time.time + shootCooldown;
             remainingShots--;
-            
+
             if (remainingShots <= 0)
                 shouldDestroyWhenProjectilesFinish = true;
 
@@ -388,9 +377,36 @@ namespace Pixel
 
             if (splineAnimate.NormalizedTime >= 1f)
             {
+                if (ShouldLoopInsteadOfReturnToSlot())
+                {
+                    RestartSplineLoop();
+                    return;
+                }
+
                 StopRunningState();
                 MoveToSlotReturn();
             }
+        }
+
+        private bool ShouldLoopInsteadOfReturnToSlot()
+        {
+            return GetActiveBlockCount() <= maxConcurrentRunningBlocks;
+        }
+
+        private void RestartSplineLoop()
+        {
+            if (splineAnimate == null) return;
+
+            ReleaseCurrentSlot();
+            splineAnimate.Restart(true);
+            splineAnimate.Play();
+            Time.timeScale = 2f;
+        }
+
+        private int GetActiveBlockCount()
+        {
+            activeBlocks.RemoveWhere(block => block == null || !block.gameObject.activeInHierarchy);
+            return activeBlocks.Count;
         }
 
         private void StartRunningState()
@@ -409,22 +425,6 @@ namespace Pixel
             runningBlockCount = Mathf.Max(0, runningBlockCount - 1);
         }
 
-        private int GetOccupiedSlotCountForLimit()
-        {
-            TryResolveSlotReturns();
-
-            if (slotReturns == null || slotReturns.Length == 0) return 0;
-
-            int occupiedCount = 0;
-            for (int i = 0; i < slotReturns.Length; i++)
-            {
-                if (slotReturns[i] == null || !slotReturns[i].IsOccupied) continue;
-                if (currentSlotReturn != null && slotReturns[i] == currentSlotReturn) continue;
-                occupiedCount++;
-            }
-            return occupiedCount;
-        }
-
         private void MoveToSlotReturn()
         {
             TryResolveSlotReturns();
@@ -441,7 +441,6 @@ namespace Pixel
                 AnimateMoveToSlotReturn(slotReturns[i]);
                 return;
             }
-
         }
 
         private void ReleaseCurrentSlot()
@@ -461,7 +460,7 @@ namespace Pixel
             Vector3 targetLocalPosition = GetTargetLocalPosition(slotReturn.transform.position);
             float baseLocalZ = targetLocalPosition.z;
             float duration = Mathf.Max(0.01f, returnJumpDuration);
-            
+
             Sequence jumpSequence = Sequence.Create()
                 .Chain(Tween.LocalPositionZ(transform, baseLocalZ + returnJumpHeight, duration * 0.5f, Ease.OutQuad))
                 .Chain(Tween.LocalPositionZ(transform, baseLocalZ, duration * 0.5f, Ease.InQuad));
@@ -531,8 +530,7 @@ namespace Pixel
             if (cachedRenderer.sharedMaterial != null && cachedRenderer.sharedMaterial.HasProperty("_Color"))
             {
                 Color c = _mpb.GetColor("_Color");
-                if (c != default)
-                    return c;
+                if (c != default) return c;
 
                 return cachedRenderer.material.GetColor("_Color");
             }
