@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using Zenject;
 
 namespace Pixel
 {
@@ -14,7 +15,9 @@ namespace Pixel
         [SerializeField] private Transform spawnPoint;
         [SerializeField] private int bulletCount = 10;
         [SerializeField] private Color blockColor = Color.white;
-        
+
+        [Inject] private DiContainer _container;
+
         private MaterialPropertyBlock mpb;
         private PrefabPool<BlockSplineRunner> blockPool;
         private BlockSplineRunner blockPrefabComponent;
@@ -39,25 +42,28 @@ namespace Pixel
 
         public void SpawnConfiguredBlock()
         {
-            SpawnBlock(bulletCount, blockColor);
+            BlockSplineRunner runner = SpawnBlock(bulletCount, blockColor);
+            if (runner != null)
+                runner.TryRun();
         }
 
         public BlockSplineRunner SpawnBlock(int shotCount, Color color)
         {
             ResolvePrefab();
-            
+
             if (blockPrefabComponent == null)
-            {
                 return null;
-            }
 
             blockPool ??= new PrefabPool<BlockSplineRunner>(blockPrefabComponent, parent);
 
             BlockSplineRunner runner = blockPool.Get();
             runner.SetPool(blockPool);
 
+            _container.Inject(runner);
+
             Transform runnerTransform = runner.transform;
             runnerTransform.SetParent(parent, false);
+
             if (spawnPoint != null)
                 runnerTransform.SetPositionAndRotation(spawnPoint.position, spawnPoint.rotation);
 
@@ -73,7 +79,6 @@ namespace Pixel
             blockPrefabComponent = blockPrefab != null ? blockPrefab.GetComponent<BlockSplineRunner>() : null;
         }
 
-     
         private void ApplyColor(GameObject target, Color color)
         {
             if (target == null) return;

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Zenject;
 
 namespace Pixel
 {
@@ -8,28 +9,30 @@ namespace Pixel
         [SerializeField] private RenderMap mapSource;
         [SerializeField] private GameObject prefab;
         [SerializeField] private Transform parent;
-        
+
         [SerializeField] private float colorTolerance = 0.05f;
         [SerializeField] private float alphaThreshold = 0.1f;
         [SerializeField] private float spacing = 1.2f;
         [SerializeField] private int column = 5;
-
+        
         private MaterialPropertyBlock _mpb;
         private PrefabPool<BlockSplineRunner> blockPool;
 
+        [Inject] private DiContainer _container;
+        
         private void Start()
         {
             SpawnUnique();
         }
-        
-        //Spawn Block bắn đạn 
-            // check tranh rồi kiếm tra màu rồi add và list danh sách màu của tranh có là những màu gì
+
+        // spawn wepon theo màu của tranh đang có
         public void SpawnUnique()
         {
             if (mapSource == null) return;
+
             BlockSplineRunner blockPrefab = prefab != null ? prefab.GetComponent<BlockSplineRunner>() : null;
-            
             if (blockPrefab == null) return;
+
             blockPool ??= new PrefabPool<BlockSplineRunner>(blockPrefab, parent);
 
             Sprite sourceSprite = mapSource.SourceSprite;
@@ -48,6 +51,7 @@ namespace Pixel
                     AddOrIncreaseColorGroup(colorGroups, color);
                 }
             }
+
             for (int i = 0; i < colorGroups.Count; i++)
             {
                 int x = i % column;
@@ -55,9 +59,11 @@ namespace Pixel
 
                 BlockSplineRunner runner = blockPool.Get();
                 runner.SetPool(blockPool);
+
+                _container.Inject(runner);
+
                 GameObject obj = runner.gameObject;
                 obj.transform.SetParent(parent, false);
-
                 obj.transform.localPosition = new Vector3(x * spacing, y * spacing, 0);
                 obj.transform.localRotation = Quaternion.Euler(90, 0, 0);
 
@@ -66,21 +72,23 @@ namespace Pixel
             }
         }
 
-        // danh sách màu 
+        // adđ màu của tranh vào danh sách
         private void AddOrIncreaseColorGroup(List<ColorGroup> groups, Color target)
         {
             for (int i = 0; i < groups.Count; i++)
             {
                 if (!IsSimilar(groups[i].Color, target)) continue;
+
                 ColorGroup group = groups[i];
                 group.Count++;
                 groups[i] = group;
                 return;
             }
+
             groups.Add(new ColorGroup(target, 1));
         }
 
-        // độ lệch màu 
+        // độ lệch màu
         private bool IsSimilar(Color a, Color b)
         {
             return Vector3.Distance(
@@ -88,13 +96,15 @@ namespace Pixel
                 new Vector3(b.r, b.g, b.b)
             ) <= colorTolerance;
         }
-        // Set màu mesh cho block bắn đạn 
+
+        // sẻ màu mesh cho wepon
         private void SetColor(GameObject obj, Color color)
         {
             if (_mpb == null) _mpb = new MaterialPropertyBlock();
+
             var renderer = obj.GetComponent<MeshRenderer>();
             if (renderer == null) return;
-            
+
             renderer.GetPropertyBlock(_mpb);
             _mpb.SetColor("_BaseColor", color);
             renderer.SetPropertyBlock(_mpb);

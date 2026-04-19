@@ -19,6 +19,12 @@ namespace Pixel
         public Sprite SourceSprite => _sourceSprite;
         private PrefabPool<ColorCell> _cellPool;
 
+        private void Awake()
+        {
+            Application.targetFrameRate = 60;
+            Input.multiTouchEnabled = false;
+        }
+
         private void Start()
         {
             Spawn();
