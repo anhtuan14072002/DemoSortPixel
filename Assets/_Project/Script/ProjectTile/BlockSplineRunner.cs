@@ -1,40 +1,40 @@
 ﻿using System;                        
-using System.Collections.Generic;    
-using UnityEngine;
-using UnityEngine.Splines;         
-using TMPro;                       
-using PrimeTween;                     
-using Zenject;                       
+using System.Collections.Generic;     
+using UnityEngine;                 
+using UnityEngine.Splines;          
+using TMPro;                         
+using PrimeTween;                  
+using Zenject;                      
 
 namespace Pixel
 {
     public class BlockSplineRunner : MonoBehaviour, IPoolable
     {
-        // Vị trí bắn projectile ra ngoài
+        // Điểm spawn projectile
         [SerializeField] private Transform projectileSpawnPoint;
 
-        // LayerMask để raycast chỉ trúng đúng layer mong muốn
+        // LayerMask để raycast chỉ trúng các object mong muốn
         [SerializeField] private LayerMask cellLayerMask = ~0;
 
-        // Prefab projectile dùng để bắn vào cell
+        // Prefab projectile dùng để bắn cell
         [SerializeField] private GameObject hitPrefab;
 
         // Text hiển thị số đạn còn lại
         [SerializeField] private TMP_Text remainingShotsText;
 
-        // Độ lệch màu cho phép khi so block với cell
+        // Sai số cho phép khi so màu block với màu cell
         [SerializeField] private float colorTolerance = 0.05f;
 
-        // Chiều dài tia raycast từ block bắn vào map
+        // Độ dài tia raycast từ block bắn vào map
         [SerializeField] private float castDistance = 8f;
 
-        // Dời điểm bắt đầu cast lùi nhẹ về phía sau để ray ổn định hơn
+        // Lùi điểm bắt đầu ray ra sau một chút để ray ổn định hơn
         [SerializeField] private float originBackOffset = 0.15f;
 
         // Tốc độ bay của projectile
         [SerializeField] private float projectileSpeed = 12f;
 
-        // Khoảng nghỉ giữa 2 phát bắn
+        // Khoảng nghỉ giữa 2 lần bắn
         [SerializeField] private float shootCooldown = 0.03f;
 
         // Thời gian scale nhỏ lại khi block hết đạn
@@ -43,116 +43,114 @@ namespace Pixel
         // Thời gian block nhảy về slot
         [SerializeField] private float returnJumpDuration = 0.35f;
 
-        // Độ cao cú nhảy khi về slot
+        // Độ cao cú nhảy khi block quay về slot
         [SerializeField] private float returnJumpHeight = 0.6f;
 
-        // Số block tối đa được chạy cùng lúc
+        // Giới hạn số block được chạy cùng lúc
         [SerializeField] private int maxConcurrentRunningBlocks = 5;
 
-        // Khoảng cách tối thiểu giữa block này và block khác trước khi cho bắt đầu chạy
+        // Khoảng cách tối thiểu giữa block này với block đang chạy khác trước khi cho start
         [SerializeField] private float minStartSpacingBetweenBlocks = 1.2f;
 
-        // Có vẽ ray debug trong Scene view hay không
+        // Có vẽ tia ray debug trong Scene view hay không
         [SerializeField] private bool drawDebugCast = true;
 
-        // Tập hợp chứa toàn bộ BlockSplineRunner đang active trong scene
+        // Tập chứa toàn bộ block đang active trong scene
         public static readonly HashSet<BlockSplineRunner> AllRunners = new();
 
-        // Số block hiện đang ở trạng thái chạy
+        // Số block hiện đang chạy
         public static int RunningCount { get; private set; }
 
-        // Event báo ra ngoài khi RunningCount thay đổi
+        // Event bắn ra khi RunningCount thay đổi
         public static event Action<int> OnRunningCountChanged;
 
         // Spline mà block sẽ chạy theo
         private SplineContainer splineContainer;
 
-        // Danh sách slot để block quay về khi chạy xong
+        // Danh sách slot để block quay về khi xong
         private SlotReturn[] slotReturns;
 
-        // Transform của map, dùng để xác định hướng bắn vào trong
+        // Transform của map, dùng để xác định hướng bắn vào phía trong
         private Transform mapTransform;
 
-        // Component animate chạy theo spline
+        // Component animate chạy spline
         private SplineAnimate splineAnimate;
 
-        // Cache collider của block để tránh GetComponent nhiều lần
+        // Cache collider của block
         private Collider cachedCollider;
 
-        // Cache renderer để đọc màu block
+        // Cache renderer của block
         private MeshRenderer cachedRenderer;
 
-        // MaterialPropertyBlock để làm việc với màu mà không phải clone material
+        // Dùng để lấy / set màu mà không cần clone material
         private MaterialPropertyBlock _mpb;
 
-        // Slot hiện tại block đang chiếm
+        // Slot hiện tại block đang giữ
         private SlotReturn currentSlotReturn;
 
-        // Cờ cho biết block có đang chạy trên spline hay không
-        private bool isRunning = false;
+        // Block có đang chạy trên spline hay không
+        private bool isRunning;
 
-        // Cờ cho biết block có đang trong quá trình nhảy về slot hay không
-        private bool isReturningToSlot = false;
+        // Block có đang trong animation trở về slot hay không
+        private bool isReturningToSlot;
 
-        // Lưu ID của các cell đã bị xóa
+        // Lưu ID các cell đã bị xóa, để không xử lý lại
         private readonly HashSet<int> deletedInstanceIds = new();
 
-        // Lưu ID của các cell đang có projectile bay tới
+        // Lưu ID các cell đang có projectile bay tới
         private readonly HashSet<int> pendingInstanceIds = new();
 
-        // Lưu ID cell gần nhất raycast đang chạm tới
+        // ID của cell gần nhất mà ray đang chạm
         private int lastHitCellId = -1;
 
-        // Lưu ID cell gần nhất vừa bắn
+        // ID của cell vừa bắn gần nhất
         private int lastShotCellId = -1;
 
         // Thời điểm sớm nhất được phép bắn tiếp
-        private float nextAllowedShootTime = 0f;
+        private float nextAllowedShootTime;
 
-        // Camera chính dùng để bắn ray khi click chuột
+        // Camera chính dùng để raycast khi click vào block
         private static Camera cam;
-
-        // Số block đang chạy toàn cục
-        private static int runningBlockCount = 0;
-
-        // Tập hợp các block đang active
-        private static readonly HashSet<BlockSplineRunner> activeBlocks = new();
 
         // Số đạn còn lại
         private int remainingShots;
 
-        // Nếu true, sau khi projectile bay xong thì block sẽ biến mất
+        // Nếu true thì khi hết đạn sẽ chờ projectile bay xong rồi mới destroy
         private bool shouldDestroyWhenProjectilesFinish;
 
-        // Nếu true, block đang trong quá trình destroy do hết đạn
+        // Nếu true thì block đang trong quá trình destroy vì hết đạn
         private bool isDestroyingOutOfShots;
 
-        // Pool của projectile
+        // Pool chứa các projectile
         private PrefabPool<ColorProjectile> projectilePool;
 
-        // Pool của chính block
+        // Pool chứa các block
         private PrefabPool<BlockSplineRunner> blockPool;
 
         // Component projectile lấy từ prefab
         private ColorProjectile projectilePrefabComponent;
 
-        // Scale ban đầu của block để reset khi lấy lại từ pool
+        // Scale ban đầu của block để reset lại khi spawn từ pool
         private Vector3 initialLocalScale;
-
+        
         [Inject]
-        public void Construct(SplineContainer SplineContainer, RenderMap RenderMap, SlotReturn[] SlotReturns)  
+        public void Construct(
+            SplineContainer SplineContainer,  
+            RenderMap RenderMap,             
+            SlotReturn[] SlotReturns)        
         {
             splineContainer = SplineContainer;
-            mapTransform = RenderMap != null ? RenderMap.transform : null; 
+            mapTransform = RenderMap != null ? RenderMap.transform : null;
             slotReturns = SlotReturns;
         }
 
+        // Gán pool của block để sau này trả block về pool
         public void SetPool(PrefabPool<BlockSplineRunner> prefabPool)
         {
             blockPool = prefabPool;
         }
 
-        // Hàm gọi khi object được lấy ra từ pool
+        // Hàm được gọi khi object được lấy ra từ pool
         public void OnSpawned()
         {
             gameObject.SetActive(true);
@@ -163,7 +161,7 @@ namespace Pixel
             ReleaseCurrentSlot();
         }
 
-        // Hàm gọi khi object bị trả về pool
+        // Hàm được gọi khi object bị trả về pool
         public void OnDespawned()
         {
             StopRunningState();
@@ -172,24 +170,25 @@ namespace Pixel
             pendingInstanceIds.Clear();
             lastHitCellId = -1;
             lastShotCellId = -1;
+            nextAllowedShootTime = 0f;
             isDestroyingOutOfShots = false;
             isReturningToSlot = false;
             shouldDestroyWhenProjectilesFinish = false;
             gameObject.SetActive(false);
         }
 
+        // Awake chạy khi object được tạo lần đầu
         private void Awake()
         {
             splineAnimate = GetComponent<SplineAnimate>();
             cachedCollider = GetComponent<Collider>();
             cachedRenderer = GetComponent<MeshRenderer>();
-
+            
             initialLocalScale = transform.localScale;
             projectilePrefabComponent = hitPrefab != null ? hitPrefab.GetComponent<ColorProjectile>() : null;
 
             if (projectilePrefabComponent != null)
                 projectilePool = new PrefabPool<ColorProjectile>(projectilePrefabComponent, null);
-
             if (splineAnimate != null)
                 splineAnimate.PlayOnAwake = false;
             CacheMainCamera();
@@ -199,27 +198,25 @@ namespace Pixel
         private void OnEnable()
         {
             AllRunners.Add(this);
-            activeBlocks.Add(this);
         }
 
         private void OnDisable()
         {
             StopRunningState();
-            activeBlocks.Remove(this);
             AllRunners.Remove(this);
         }
 
         private void Update()
         {
-            if (Input.GetMouseButtonDown(0))
-                HandleClick();
+            if (Input.GetMouseButtonDown(0)) HandleClick();
+            if (!isRunning) return;
+            if (mapTransform == null) return;
 
-            if (isRunning)
-            {
-                if (mapTransform == null) return;
-                DetectAndShootNearestCellByRaycast();
-                CheckSplineFinished();
-            }
+            // Trong lúc block đang chạy thì raycast để tìm cell hợp lệ và bắn
+            DetectAndShootNearestCellByRaycast();
+
+            // Đồng thời kiểm tra đã chạy hết spline chưa
+            CheckSplineFinished();
         }
 
         // Xử lý click chuột vào block
@@ -228,35 +225,36 @@ namespace Pixel
             CacheMainCamera();
             if (cam == null) return;
             Ray ray = cam.ScreenPointToRay(Input.mousePosition);
-
-            if (Physics.Raycast(ray, out RaycastHit hit))
-            {
-                if (IsHitThisBlock(hit.collider))
-                {
-                    if (isRunning) return;
-                    if (runningBlockCount >= maxConcurrentRunningBlocks) return;
-                    TryRun();
-                }
-            }
+            if (!Physics.Raycast(ray, out RaycastHit hit)) return;
+            if (!IsHitThisBlock(hit.collider)) return;
+            StartRun();
         }
 
-        // Hàm thử cho block bắt đầu chạy
-        public bool TryRun()
+        // Hàm public để bắt đầu chạy block
+        public bool StartRun()
         {
-            if (!CanStartRun())
-                return false;
-            RunInternal();
+            if (!CanStartRun()) return false;
+            ReleaseCurrentSlot();
+            deletedInstanceIds.Clear();
+            pendingInstanceIds.Clear();
+            lastHitCellId = -1;
+            lastShotCellId = -1;
+            nextAllowedShootTime = 0f;
+            splineAnimate.Container = splineContainer;
+            splineAnimate.Restart(true);
+            splineAnimate.Play();
+            StartRunningState();
             return true;
         }
-        
-        // Check toàn bộ điều kiện trước khi cho block chạy
+
+        // Kiểm tra toàn bộ điều kiện để block được phép chạy
         private bool CanStartRun()
         {
             if (splineAnimate == null) return false;
             if (splineContainer == null) return false;
             if (mapTransform == null) return false;
             if (isRunning) return false;
-            if (runningBlockCount >= maxConcurrentRunningBlocks) return false;
+            if (RunningCount >= maxConcurrentRunningBlocks) return false;
             if (!HasEnoughSpacingFromRunningBlocks()) return false;
             return true;
         }
@@ -266,7 +264,6 @@ namespace Pixel
         {
             Vector3 myPosition = transform.position;
             float minDistanceSqr = minStartSpacingBetweenBlocks * minStartSpacingBetweenBlocks;
-
             foreach (BlockSplineRunner other in AllRunners)
             {
                 if (other == null) continue;
@@ -279,26 +276,10 @@ namespace Pixel
             return true;
         }
 
-        // Hàm chạy thật sự sau khi đã check xong điều kiện
-        private void RunInternal()
-        {
-            ReleaseCurrentSlot();
-            deletedInstanceIds.Clear();
-            pendingInstanceIds.Clear();
-            lastHitCellId = -1;
-            lastShotCellId = -1;
-            nextAllowedShootTime = 0f;
-            splineAnimate.Container = splineContainer;
-            splineAnimate.Restart(true);
-            splineAnimate.Play();
-            StartRunningState();
-        }
-
-        // Gán số đạn ban đầu
+        // Gán số đạn ban đầu cho block
         public void InitializeShotLimit(int shotCount)
         {
             remainingShots = Mathf.Max(0, shotCount);
-            // Nếu ngay từ đầu số đạn là 0 thì đánh dấu sẽ destroy khi projectile xong
             shouldDestroyWhenProjectilesFinish = remainingShots == 0;
             UpdateRemainingShotsText();
         }
@@ -306,27 +287,24 @@ namespace Pixel
         // Cache camera chính
         private void CacheMainCamera()
         {
-            if (cam == null || !cam.isActiveAndEnabled)
-                cam = Camera.main;
+            if (cam == null || !cam.isActiveAndEnabled) cam = Camera.main;
         }
 
-        // Kiểm tra collider vừa hit có phải là block này không
+        // Kiểm tra collider hit có phải là block này không
         private bool IsHitThisBlock(Collider hitCollider)
-        {
+        { 
             if (hitCollider == null) return false;
             if (hitCollider.gameObject == gameObject) return true;
             if (cachedCollider != null && hitCollider == cachedCollider) return true;
             return hitCollider.transform.IsChildOf(transform);
         }
 
-        // Raycast vào map để tìm cell gần nhất và thử bắn
+        // Raycast vào map để tìm cell gần nhất hợp lệ rồi thử bắn
         private void DetectAndShootNearestCellByRaycast()
         {
-            if (mapTransform == null) return;
             Vector3 castDirection = GetInwardDirection();
             if (castDirection == Vector3.zero) return;
             Vector3 origin = transform.position - castDirection * originBackOffset;
-
             // if (drawDebugCast) Debug.DrawRay(origin, castDirection * castDistance, Color.green);
             RaycastHit[] hits = Physics.RaycastAll(origin, castDirection, castDistance, cellLayerMask);
 
@@ -336,6 +314,8 @@ namespace Pixel
                 return;
             }
             Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+            // Lấy cell hợp lệ gần nhất từ mảng hit đã sort
             ColorCell nearestCell = GetNearestValidCellFromRay(hits);
 
             if (nearestCell == null)
@@ -348,19 +328,17 @@ namespace Pixel
             if (currentCellId == lastHitCellId) return;
             lastHitCellId = currentCellId;
             if (Time.time < nextAllowedShootTime) return;
-            TryShootCell(nearestCell);
+            ShootCellIfValid(nearestCell);
         }
 
-        // Từ mảng raycast hit, tìm ra cell hợp lệ gần nhất
+        // Từ mảng hit đã sort, tìm cell gần nhất hợp lệ
         private ColorCell GetNearestValidCellFromRay(RaycastHit[] hits)
         {
             for (int i = 0; i < hits.Length; i++)
             {
                 Collider hitCollider = hits[i].collider;
                 if (hitCollider == null) continue;
-
                 ColorCell cell = hitCollider.GetComponent<ColorCell>();
-
                 if (cell == null)
                     cell = hitCollider.GetComponentInParent<ColorCell>();
 
@@ -370,258 +348,134 @@ namespace Pixel
                 if (pendingInstanceIds.Contains(id)) continue;
                 return cell;
             }
-
             return null;
         }
 
-        // Xác định hướng block sẽ raycast vào trong map
+        // Xác định hướng bắn vào phía trong map dựa trên vị trí block
         private Vector3 GetInwardDirection()
         {
-            // Chuyển position của block sang local space của map
             Vector3 localPos = mapTransform.InverseTransformPoint(transform.position);
 
-            // Lấy trị tuyệt đối để biết block gần cạnh nào hơn
             float absX = Mathf.Abs(localPos.x);
             float absY = Mathf.Abs(localPos.y);
-
-            // Nếu gần cạnh trái / phải hơn
             if (absX >= absY)
-            {
-                // Nếu block nằm bên phải map => bắn sang trái
-                if (localPos.x > 0f) return -mapTransform.right;
-
-                // Nếu block nằm bên trái map => bắn sang phải
-                return mapTransform.right;
-            }
-
-            // Nếu gần cạnh trên / dưới hơn
-            // Nếu block ở phía trên => bắn xuống
-            if (localPos.y > 0f) return -mapTransform.up;
-
-            // Nếu block ở phía dưới => bắn lên
-            return mapTransform.up;
+                return localPos.x > 0f ? -mapTransform.right : mapTransform.right;
+            return localPos.y > 0f ? -mapTransform.up : mapTransform.up;
         }
 
-        // Thử bắn một cell
-        private void TryShootCell(ColorCell cell)
+        // Bắn cell nếu cell hợp lệ
+        private void ShootCellIfValid(ColorCell cell)
         {
-            // Không có cell thì không bắn
             if (cell == null) return;
-
-            // Hết đạn thì không bắn
             if (remainingShots <= 0) return;
-
-            // Lấy ID cell
             int id = cell.gameObject.GetInstanceID();
-
-            // Nếu cell đã bị xóa thì không bắn
             if (deletedInstanceIds.Contains(id)) return;
-
-            // Nếu cell đang có projectile khác bay tới thì không bắn
             if (pendingInstanceIds.Contains(id)) return;
-
-            // Nếu đây là cell vừa mới bắn ở lần trước thì không bắn lặp ngay
             if (id == lastShotCellId) return;
-
-            // Lấy màu hiện tại của block
             Color myColor = GetMyColor();
-
-            // Lấy màu của cell
-            Color cellColor = cell.CellColor;
-
-            // Nếu màu không giống nhau thì không bắn
-            if (!IsSameColor(myColor, cellColor)) return;
-
-            // Không có hitPrefab thì không bắn được
+            if (!IsSameColor(myColor, cell.CellColor)) return;
             if (hitPrefab == null) return;
-
-            // Nếu chưa có projectile pool thì tạo
             if (projectilePool == null)
             {
                 projectilePrefabComponent = hitPrefab.GetComponent<ColorProjectile>();
                 if (projectilePrefabComponent == null) return;
-
                 projectilePool = new PrefabPool<ColorProjectile>(projectilePrefabComponent, null);
             }
-
-            // Lấy vị trí bắn, ưu tiên projectileSpawnPoint
             Vector3 spawnPos = projectileSpawnPoint != null ? projectileSpawnPoint.position : transform.position;
-
-            // Lấy projectile từ pool
             ColorProjectile projectile = projectilePool.Get();
-
-            // Đặt vị trí và rotation ban đầu cho projectile
             projectile.transform.SetPositionAndRotation(spawnPos, Quaternion.identity);
-
-            // Truyền dữ liệu vào projectile để nó bay tới cell
             projectile.Initialize(cell, myColor, colorTolerance, projectileSpeed, this);
-
-            // Đánh dấu cell này đang có projectile bay tới
             pendingInstanceIds.Add(id);
-
-            // Lưu lại cell vừa bắn
             lastShotCellId = id;
-
-            // Đặt cooldown cho phát bắn kế tiếp
             nextAllowedShootTime = Time.time + shootCooldown;
-
-            // Trừ 1 đạn
             remainingShots--;
-
-            // Nếu vừa hết đạn thì đánh dấu sẽ destroy sau khi projectile bay xong
             if (remainingShots <= 0)
                 shouldDestroyWhenProjectilesFinish = true;
-
-            // Cập nhật text UI
             UpdateRemainingShotsText();
         }
 
-        // Projectile gọi ngược về block khi projectile kết thúc
+        // Projectile gọi ngược về đây khi hoàn thành hành trình
         public void NotifyProjectileFinished(ColorCell cell, bool deleteCell)
         {
-            // Không có cell thì thôi
             if (cell == null) return;
-
-            // Lấy ID cell
             int id = cell.gameObject.GetInstanceID();
-
-            // Bỏ cell này khỏi danh sách pending
             pendingInstanceIds.Remove(id);
-
-            // Nếu projectile báo rằng cell nên bị xóa
             if (deleteCell)
             {
-                // Nếu cell chưa nằm trong danh sách deleted thì thêm vào
-                if (!deletedInstanceIds.Contains(id))
-                    deletedInstanceIds.Add(id);
-
-                // Cho cell chạy animation phá hủy
+                deletedInstanceIds.Add(id);
                 if (cell.gameObject != null)
                     cell.PlayDestroyAnimation();
             }
-
-            // Kiểm tra xem block có cần biến mất không
-            TryDestroyIfOutOfShots();
+            DestroyIfOutOfShots();
         }
 
         // Kiểm tra block đã đi hết spline chưa
         private void CheckSplineFinished()
         {
-            // Nếu mất SplineAnimate thì dừng ngay
             if (splineAnimate == null)
             {
                 StopRunningState();
                 return;
             }
+            if (splineAnimate.NormalizedTime < 1f) return;
 
-            // Nếu đã chạy tới cuối spline
-            if (splineAnimate.NormalizedTime >= 1f)
+            if (ShouldLoopInsteadOfReturnToSlot())
             {
-                // Nếu còn điều kiện loop tiếp thì restart spline
-                if (ShouldLoopInsteadOfReturnToSlot())
-                {
-                    RestartSplineLoop();
-                    return;
-                }
-
-                // Nếu không loop nữa thì dừng chạy và về slot
-                StopRunningState();
-                MoveToSlotReturn();
+                RestartSplineLoop();
+                return;
             }
+            StopRunningState();
+            MoveToSlotReturn();
         }
 
-        // Quyết định có nên loop spline tiếp hay không
+        // Quyết định block nên loop lại spline hay quay về slot
         private bool ShouldLoopInsteadOfReturnToSlot()
         {
-            // Nếu số block active <= giới hạn maxConcurrent thì cho loop tiếp
-            return GetActiveBlockCount() <= maxConcurrentRunningBlocks;
+            return AllRunners.Count <= maxConcurrentRunningBlocks;
         }
 
-        // Chạy lại spline từ đầu
+        // Restart spline từ đầu
         private void RestartSplineLoop()
         {
-            // Nếu mất SplineAnimate thì thôi
             if (splineAnimate == null) return;
-
-            // Thả slot hiện tại trước
             ReleaseCurrentSlot();
 
-            // Restart và play lại spline
             splineAnimate.Restart(true);
             splineAnimate.Play();
         }
 
-        // Đếm số block đang active
-        private int GetActiveBlockCount()
-        {
-            // Xóa các block null hoặc không còn active khỏi set
-            activeBlocks.RemoveWhere(block => block == null || !block.gameObject.activeInHierarchy);
-
-            // Trả về số lượng còn lại
-            return activeBlocks.Count;
-        }
-
-        // Bắt đầu trạng thái đang chạy
+        // Đánh dấu block bắt đầu chạy
         private void StartRunningState()
         {
-            // Nếu đang chạy rồi thì không tăng count lại
             if (isRunning) return;
-
-            // Đánh dấu block đang chạy
             isRunning = true;
-
-            // Tăng count nội bộ
-            runningBlockCount++;
-
-            // Tăng count public
             RunningCount++;
-
-            // Bắn event cho UI / manager biết count đã đổi
             OnRunningCountChanged?.Invoke(RunningCount);
         }
 
-        // Dừng trạng thái đang chạy
+        // Đánh dấu block dừng chạy
         private void StopRunningState()
         {
-            // Nếu block vốn không chạy thì thôi
             if (!isRunning) return;
-
-            // Đánh dấu block không còn chạy
             isRunning = false;
-
-            // Giảm count nội bộ nhưng không cho âm
-            runningBlockCount = Mathf.Max(0, runningBlockCount - 1);
-
-            // Giảm count public nhưng không cho âm
             RunningCount = Mathf.Max(0, RunningCount - 1);
-
-            // Bắn event cập nhật UI / manager
             OnRunningCountChanged?.Invoke(RunningCount);
         }
 
-        // Cho block di chuyển về slot trống đầu tiên
+        // Tìm slot trống và cho block quay về đó
         private void MoveToSlotReturn()
         {
-            // Không có slot nào thì thôi
             if (slotReturns == null || slotReturns.Length == 0) return;
 
-            // Duyệt toàn bộ slot
             for (int i = 0; i < slotReturns.Length; i++)
             {
-                // Nếu slot null thì bỏ qua
-                if (slotReturns[i] == null) continue;
+                SlotReturn slot = slotReturns[i];
+                if (slot == null) continue;
+                if (slot.IsOccupied) continue;
+                slot.SetOccupied(true);
 
-                // Nếu slot đã bị chiếm thì bỏ qua
-                if (slotReturns[i].IsOccupied) continue;
-
-                // Đánh dấu slot này đã bị chiếm
-                slotReturns[i].SetOccupied(true);
-
-                // Lưu slot hiện tại
-                currentSlotReturn = slotReturns[i];
-
-                // Animate block về slot này
-                AnimateMoveToSlotReturn(slotReturns[i]);
+                currentSlotReturn = slot;
+                AnimateMoveToSlotReturn(slot);
                 return;
             }
         }
@@ -629,52 +483,31 @@ namespace Pixel
         // Thả slot hiện tại nếu đang giữ
         private void ReleaseCurrentSlot()
         {
-            // Nếu không giữ slot nào thì thôi
             if (currentSlotReturn == null) return;
-
-            // Đánh dấu slot là trống
             currentSlotReturn.SetOccupied(false);
-
-            // Xóa ref slot hiện tại
             currentSlotReturn = null;
         }
 
         // Animate block nhảy về slot
         private void AnimateMoveToSlotReturn(SlotReturn slotReturn)
         {
-            // Không có slot thì thôi
             if (slotReturn == null) return;
-
-            // Nếu đang return rồi thì không chạy tiếp
             if (isReturningToSlot) return;
-
-            // Đánh dấu đang return
             isReturningToSlot = true;
-
-            // Đổi world position của slot về local position theo parent của block
             Vector3 targetLocalPosition = GetTargetLocalPosition(slotReturn.transform.position);
-
-            // Lưu local Z đích
             float baseLocalZ = targetLocalPosition.z;
-
-            // Đảm bảo duration > 0
             float duration = Mathf.Max(0.01f, returnJumpDuration);
 
-            // Tạo sequence nhảy: đi lên rồi hạ xuống
             Sequence jumpSequence = Sequence.Create()
                 .Chain(Tween.LocalPositionZ(transform, baseLocalZ + returnJumpHeight, duration * 0.5f, Ease.OutQuad))
                 .Chain(Tween.LocalPositionZ(transform, baseLocalZ, duration * 0.5f, Ease.InQuad));
 
-            // Tạo sequence vừa di chuyển ngang vừa nhảy
             Sequence.Create()
                 .Group(Tween.LocalPosition(transform, targetLocalPosition, duration, Ease.InOutSine))
                 .Group(jumpSequence)
                 .OnComplete(this, target =>
                 {
-                    // Khi xong thì xoay block theo rotation của slot
                     target.transform.rotation = slotReturn.transform.rotation;
-
-                    // Đánh dấu đã return xong
                     target.isReturningToSlot = false;
                 });
         }
@@ -682,44 +515,29 @@ namespace Pixel
         // Đổi world position sang local position theo parent của block
         private Vector3 GetTargetLocalPosition(Vector3 worldPosition)
         {
-            // Nếu block không có parent thì dùng world position luôn
+            // Nếu block không có parent thì trả world position luôn
             if (transform.parent == null)
                 return worldPosition;
-
             // Nếu có parent thì đổi về local space
             return transform.parent.InverseTransformPoint(worldPosition);
         }
 
-        // Nếu hết đạn và không còn projectile pending thì destroy block
-        private void TryDestroyIfOutOfShots()
-        {
-            // Nếu chưa tới trạng thái cần destroy thì thôi
+        // Nếu block hết đạn và không còn projectile pending thì destroy block
+        private void DestroyIfOutOfShots()
+        { 
             if (!shouldDestroyWhenProjectilesFinish) return;
-
-            // Nếu vẫn còn projectile đang bay thì chờ
             if (pendingInstanceIds.Count > 0) return;
-
-            // Nếu đang destroy rồi thì không chạy lại
             if (isDestroyingOutOfShots) return;
-
-            // Đánh dấu đang destroy
             isDestroyingOutOfShots = true;
 
-            // Dừng trạng thái chạy
             StopRunningState();
-
-            // Thả slot hiện tại
             ReleaseCurrentSlot();
 
-            // Scale block về 0
             Tween.Scale(transform, Vector3.zero, Mathf.Max(0.01f, outOfShotsDestroyDuration), Ease.OutQuad)
                 .OnComplete(this, target =>
                 {
-                    // Nếu có pool thì trả block về pool
                     if (target.blockPool != null)
                         target.blockPool.Release(target);
-
-                    // Nếu không có pool thì chỉ tắt object
                     else
                         target.gameObject.SetActive(false);
                 });
@@ -732,7 +550,7 @@ namespace Pixel
             if (projectilePool != null)
                 projectilePool.Release(projectile);
 
-            // Nếu không thì tắt object
+            // Nếu không thì chỉ tắt object
             else if (projectile != null)
                 projectile.gameObject.SetActive(false);
         }
@@ -740,63 +558,39 @@ namespace Pixel
         // Lấy màu hiện tại của block
         public Color GetMyColor()
         {
-            // Nếu không có renderer thì mặc định trắng
             if (cachedRenderer == null)
                 return Color.white;
 
-            // Nếu chưa có MPB thì tạo mới
             if (_mpb == null)
                 _mpb = new MaterialPropertyBlock();
 
-            // Lấy property block hiện tại từ renderer
             cachedRenderer.GetPropertyBlock(_mpb);
 
-            // Nếu material có _BaseColor
             if (cachedRenderer.sharedMaterial != null && cachedRenderer.sharedMaterial.HasProperty("_BaseColor"))
             {
-                // Lấy màu từ property block
                 Color c = _mpb.GetColor("_BaseColor");
-
-                // Nếu property block có màu hợp lệ thì trả về nó
-                if (c != default)
-                    return c;
-
-                // Nếu không thì fallback lấy màu trực tiếp từ material
+                if (c != default) return c;
                 return cachedRenderer.material.GetColor("_BaseColor");
             }
-
-            // Nếu material có _Color
             if (cachedRenderer.sharedMaterial != null && cachedRenderer.sharedMaterial.HasProperty("_Color"))
             {
-                // Lấy màu từ property block
                 Color c = _mpb.GetColor("_Color");
-
-                // Nếu property block có màu hợp lệ thì dùng
-                if (c != default)
-                    return c;
-
-                // Nếu không thì fallback từ material
+                if (c != default) return c;
                 return cachedRenderer.material.GetColor("_Color");
             }
-
-            // Nếu không đọc được màu thì trả trắng
             return Color.white;
         }
 
-        // Cập nhật text số đạn còn lại
+        // Cập nhật text hiển thị số đạn
         private void UpdateRemainingShotsText()
-        {
-            // Nếu không có text thì thôi
-            if (remainingShotsText == null) return;
-
-            // Chuyển số đạn thành string và gán lên text
+        { if (remainingShotsText == null) return;
             remainingShotsText.text = remainingShots.ToString();
         }
 
-        // So màu theo khoảng cách RGB với tolerance
+        // So màu theo khoảng cách giữa 2 vector RGB
         private bool IsSameColor(Color a, Color b)
         {
-            // Tạo vector RGB từ màu a và b rồi so khoảng cách Euclidean
+            // Chuyển màu a và b thành vector RGB rồi tính khoảng cách
             return Vector3.Distance(
                 new Vector3(a.r, a.g, a.b),
                 new Vector3(b.r, b.g, b.b)

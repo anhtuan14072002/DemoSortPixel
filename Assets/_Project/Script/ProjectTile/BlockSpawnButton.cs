@@ -44,7 +44,7 @@ namespace Pixel
         {
             BlockSplineRunner runner = SpawnBlock(bulletCount, blockColor);
             if (runner != null)
-                runner.TryRun();
+                runner.StartRun();
         }
 
         public BlockSplineRunner SpawnBlock(int shotCount, Color color)
